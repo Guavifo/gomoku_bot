@@ -793,18 +793,39 @@
         
         function updateActiveGames(games) {
             const container = document.getElementById('activeGames');
-            
+
             if (games.length === 0) {
                 container.innerHTML = '<p class="status">No active games</p>';
                 return;
             }
-            
+
             container.innerHTML = games.map(game => {
                 const statusClass = game.status === 'completed' ? 'completed' : '';
-                const statusText = game.status === 'completed' 
-                    ? `Completed - ${game.winner} won` 
-                    : `Move ${game.move_count} - ${game.current_turn}'s turn`;
-                
+                let statusText;
+
+                if (game.status === 'completed') {
+                    const endTime = new Date(game.end_time * 1000);
+                    const now = new Date();
+                    const diffMs = now - endTime;
+                    const diffMins = Math.floor(diffMs / 60000);
+                    const diffHours = Math.floor(diffMins / 60);
+
+                    let timeAgo;
+                    if (diffMins < 1) {
+                        timeAgo = 'Just now';
+                    } else if (diffMins < 60) {
+                        timeAgo = `${diffMins}m ago`;
+                    } else if (diffHours < 24) {
+                        timeAgo = `${diffHours}h ago`;
+                    } else {
+                        timeAgo = endTime.toLocaleDateString() + ' ' + endTime.toLocaleTimeString();
+                    }
+
+                    statusText = `Completed ${timeAgo} - ${game.winner} won`;
+                } else {
+                    statusText = `Move ${game.move_count} - ${game.current_turn}'s turn`;
+                }
+
                 return `
                     <div class="game-item ${statusClass}" onclick="spectateGame('${game.game_id}')">
                         <div class="game-info">

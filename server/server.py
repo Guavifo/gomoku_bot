@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -16,7 +17,7 @@ BOARD_SIZE = 19
 MOVE_TIMEOUT = 60  # seconds
 RECONNECT_GRACE_PERIOD = 60  # seconds
 HEARTBEAT_INTERVAL = 10  # seconds
-POST_GAME_MEMORY = 600  # 10 minutes in seconds
+POST_GAME_MEMORY = 86400  # 24 hours in seconds
 INITIAL_ELO = 1000
 INITIAL_K_FACTOR = 60
 FINAL_K_FACTOR = 30
@@ -24,6 +25,10 @@ K_TRANSITION_GAMES = 30
 
 @asynccontextmanager
 async def lifespan(app):
+    # Load recent completed games from database
+    load_recent_completed_games()
+
+    # Start background tasks
     asyncio.create_task(heartbeat_task())
     asyncio.create_task(timeout_check_task())
     asyncio.create_task(cleanup_completed_games_task())
@@ -78,7 +83,7 @@ init_db()
 
 # Game state management
 class GameState:
-    def __init__(self, game_id: str, player1: str, player2: str, player1_color: int):
+    def __init__(self, game_id: str, player1: str, player2: str, player1_color: int, generate_opening: bool = True):
         self.game_id = game_id
         self.player1 = player1
         self.player2 = player2
@@ -96,9 +101,10 @@ class GameState:
         self.player_connections: Dict[str, WebSocket] = {}
         self.end_time = None
         self.elo_changes = {}  # Store ELO changes: {username: change_amount}
-        
-        # Generate random opening (3 stones in center 5x5)
-        self.generate_random_opening()
+
+        # Generate random opening (3 stones in center 5x5) for new games
+        if generate_opening:
+            self.generate_random_opening()
     
     def generate_random_opening(self):
         """Generate 3 random stones in the center 5x5 area (rows/cols 7-11)"""
@@ -296,13 +302,13 @@ class ConnectionManager:
                 "current_turn": game.get_current_player()
             })
         
-        # Include recently completed games (within 10 minutes)
+        # Include recently completed games (within 24 hours)
         current_time = time.time()
         for game, completion_time in self.completed_games:
             if current_time - completion_time <= POST_GAME_MEMORY:
                 player1_elo = get_user_elo(game.player1)
                 player2_elo = get_user_elo(game.player2)
-                
+
                 games_list.append({
                     "game_id": game.game_id,
                     "player1": game.player1,
@@ -315,11 +321,12 @@ class ConnectionManager:
                     "spectator_count": len(game.spectators),
                     "status": "completed",
                     "winner": game.winner,
-                    "outcome": game.outcome
+                    "outcome": game.outcome,
+                    "end_time": completion_time
                 })
-        
-        # Sort by status first (active before completed), then by combined ELO (descending)
-        games_list.sort(key=lambda g: (0 if g["status"] == "active" else 1, -g["combined_elo"]))
+
+        # Sort by status first (active before completed), then by end_time for completed (most recent first)
+        games_list.sort(key=lambda g: (0 if g["status"] == "active" else 1, -g.get("end_time", 0)))
         
         message = {
             "type": "active_games_update",
@@ -562,6 +569,87 @@ def save_game_to_file(game: GameState, p1_elo_before: int, p2_elo_before: int,
                 f.write(f"({move['row']},{move['col']}):{color_str}\n")
     
     return filename
+
+def load_recent_completed_games() -> None:
+    """Load completed games from the last 24 hours from database into memory"""
+    # Calculate cutoff time (24 hours ago)
+    cutoff_time = datetime.now().timestamp() - POST_GAME_MEMORY
+    cutoff_datetime = datetime.fromtimestamp(cutoff_time).isoformat()
+
+    # Query games completed in the last 24 hours
+    with sqlite3.connect('gomoku.db') as conn:
+        c = conn.cursor()
+        c.execute('''SELECT game_id, player1, player2, player1_color, winner, outcome,
+                            timestamp, filepath
+                     FROM games
+                     WHERE timestamp > ?
+                     ORDER BY timestamp DESC''', (cutoff_datetime,))
+        results = c.fetchall()
+
+    loaded_count = 0
+    for row in results:
+        game_id, player1, player2, player1_color, winner, outcome, timestamp_str, filepath = row
+
+        # Parse the game file to get move history
+        move_history = []
+        if filepath and os.path.exists(filepath):
+            try:
+                with open(filepath, 'r') as f:
+                    in_opening = False
+                    in_moves = False
+
+                    for line in f:
+                        line = line.strip()
+                        if line == "Random Opening:":
+                            in_opening = True
+                            in_moves = False
+                            continue
+                        elif line == "Moves:":
+                            in_opening = False
+                            in_moves = True
+                            continue
+
+                        # Parse move line: (row,col):Color
+                        if (in_opening or in_moves) and line.startswith('('):
+                            try:
+                                # Extract (row,col):Color
+                                coord_part, color_part = line.split(':')
+                                coord_part = coord_part.strip('()')
+                                row, col = map(int, coord_part.split(','))
+                                color = 1 if color_part == 'B' else 2
+
+                                move_history.append({
+                                    "row": row,
+                                    "col": col,
+                                    "color": color,
+                                    "is_opening": in_opening
+                                })
+                            except (ValueError, IndexError) as e:
+                                print(f"[LOAD] Warning: Failed to parse move line '{line}': {e}")
+                                continue
+            except (OSError, IOError) as e:
+                print(f"[LOAD] Warning: Could not load game file {filepath}: {e}")
+                continue
+
+        # Create GameState without generating random opening
+        game = GameState(game_id, player1, player2, player1_color, generate_opening=False)
+        game.move_history = move_history
+        game.game_over = True
+        game.winner = winner
+        game.outcome = outcome
+
+        # Reconstruct the board from move history
+        for move in move_history:
+            game.board[move['row']][move['col']] = move['color']
+
+        # Parse timestamp to get completion time
+        completion_time = datetime.fromisoformat(timestamp_str).timestamp()
+
+        # Add to completed games
+        manager.completed_games.append((game, completion_time))
+        loaded_count += 1
+
+    print(f"[STARTUP] Loaded {loaded_count} completed games from the last 24 hours")
 
 # Background tasks
 async def heartbeat_task():
@@ -870,26 +958,29 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 # Attempt move
                 if game.make_move(row, col, player_color):
-                    # Broadcast update
-                    await manager.broadcast_game_update(game)
-                    
                     # Check if game is over
                     if game.game_over:
-                        # Update database
+                        # Update database (calculates ELO changes)
                         update_game_result(game)
-                        
+
+                        # Broadcast final state with ELO changes
+                        await manager.broadcast_game_update(game)
+
                         # Move to completed games
                         manager.completed_games.append((game, time.time()))
                         del manager.active_games[game_id]
-                        
+
                         # Remove from user_to_game mapping
                         if game.player1 in manager.user_to_game:
                             del manager.user_to_game[game.player1]
                         if game.player2 in manager.user_to_game:
                             del manager.user_to_game[game.player2]
-                        
+
                         # Update active games list
                         await manager.broadcast_active_games_update()
+                    else:
+                        # Game continues - broadcast move update
+                        await manager.broadcast_game_update(game)
                 else:
                     # Invalid move
                     if row < 0 or row >= BOARD_SIZE or col < 0 or col >= BOARD_SIZE:

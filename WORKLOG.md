@@ -1,4 +1,25 @@
 ## 2026-02-14
+*Created game statistics analyzer and improved code quality with code review fixes.*
+- Added `analyze_games.py` script — generates aggregate statistics from saved game files
+- Tracks win rates by color (Black vs White), outcome types, game length distribution, median/average moves
+- Fixed type safety — corrected return type hints and removed unused imports in analyze_games.py
+- Fixed database resource leaks — converted to context manager pattern in WebSocket handlers
+- Added WebSocket connection checks — prevents errors when connection drops during message sends
+- Added visual error feedback — drag-and-drop shows green/red border flash for success/failure
+- Refactored game creation — extracted `create_and_start_game()` helper to eliminate duplication
+
+## 2026-02-14
+*Added force bot match feature with drag-and-drop UI for testing specific matchups.*
+- Added "Force Bot Match Mode" in web UI — drag one bot onto another to force them to play
+- Implemented `get_available_bots` WebSocket handler — returns bots online and not in active games
+- Implemented `force_game` WebSocket handler — creates matches between two bots with validation
+- Auto-cancels waiting games when bots are forced into new matches
+- Auto-spectates forced matches for the user who initiated them
+- Added drag-and-drop JavaScript with proper event delegation using `closest()`
+- Optimized database queries — combined two separate bot lookups into single `WHERE IN` query
+- Fixed control flow bug — validation failures now properly exit message handler
+
+## 2026-02-14
 *Fixed ELO display bug and added game persistence with 24-hour history.*
 - Fixed ELO changes not showing for normal wins — reordered broadcast to occur after ELO calculation
 - Added game persistence — server loads completed games from last 24 hours on startup

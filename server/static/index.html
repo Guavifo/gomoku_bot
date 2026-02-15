@@ -383,6 +383,23 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Force Match Mode -->
+                <div style="margin-top: 20px; padding: 15px; background: #f9f9f9; border-radius: 8px;">
+                    <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 10px;">
+                        <input type="checkbox" id="forceMatchMode" style="margin-right: 8px;">
+                        <span style="font-weight: bold;">Force Bot Match Mode</span>
+                    </label>
+                    <div id="forceMatchHelp" style="display: none; color: #666; font-size: 14px; margin-bottom: 10px;">
+                        Drag one bot onto another to force them to play each other
+                    </div>
+                    <div id="availableBotsContainer" style="display: none;">
+                        <h3 style="margin-bottom: 10px;">Available Bots</h3>
+                        <div id="availableBotsList" class="game-list" style="max-height: 300px;">
+                            <p class="status">Loading bots...</p>
+                        </div>
+                    </div>
+                </div>
             </div>
             
             <div id="activeTab" class="tab-content">
@@ -701,10 +718,32 @@
                 
                 case 'lobby_update':
                     updateLobbyGames(message.games);
+                    // Refresh available bots if in force match mode
+                    if (forceMatchModeEnabled && ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'get_available_bots' }));
+                    }
                     break;
-                
+
                 case 'active_games_update':
                     updateActiveGames(message.games);
+                    // Refresh available bots if in force match mode
+                    if (forceMatchModeEnabled && ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'get_available_bots' }));
+                    }
+                    break;
+
+                case 'available_bots':
+                    updateAvailableBots(message.bots);
+                    break;
+
+                case 'forced_game_created':
+                    // Auto-spectate the forced game
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'spectate',
+                            game_id: message.game_id
+                        }));
+                    }
                     break;
                 
                 case 'game_created':
@@ -871,7 +910,117 @@
         function createGame() {
             ws.send(JSON.stringify({ type: 'create_game' }));
         }
-        
+
+        // Force match mode state
+        let forceMatchModeEnabled = false;
+        let draggedBot = null;
+
+        // Toggle force match mode
+        document.getElementById('forceMatchMode').addEventListener('change', (e) => {
+            forceMatchModeEnabled = e.target.checked;
+            document.getElementById('forceMatchHelp').style.display = forceMatchModeEnabled ? 'block' : 'none';
+            document.getElementById('availableBotsContainer').style.display = forceMatchModeEnabled ? 'block' : 'none';
+
+            if (forceMatchModeEnabled && ws && ws.readyState === WebSocket.OPEN) {
+                // Request available bots
+                ws.send(JSON.stringify({ type: 'get_available_bots' }));
+            }
+        });
+
+        // Handle available_bots message
+        function updateAvailableBots(bots) {
+            const container = document.getElementById('availableBotsList');
+
+            if (bots.length === 0) {
+                container.innerHTML = '<p class="status">No bots available</p>';
+                return;
+            }
+
+            container.innerHTML = bots.map(bot => `
+                <div class="bot-card" draggable="true" data-username="${bot.username}"
+                     style="padding: 10px; margin: 5px 0; background: white; border: 2px solid #2196F3;
+                            border-radius: 4px; cursor: grab; user-select: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-weight: bold;">🤖 ${bot.username}</span>
+                        <span style="color: #666;">${bot.elo} ELO</span>
+                    </div>
+                </div>
+            `).join('');
+
+            // Add drag event listeners
+            document.querySelectorAll('.bot-card').forEach(card => {
+                card.addEventListener('dragstart', handleDragStart);
+                card.addEventListener('dragover', handleDragOver);
+                card.addEventListener('drop', handleDrop);
+                card.addEventListener('dragend', handleDragEnd);
+            });
+        }
+
+        function handleDragStart(e) {
+            const card = e.target.closest('.bot-card');
+            if (!card) return;
+
+            draggedBot = card.dataset.username;
+            card.style.opacity = '0.5';
+            card.style.cursor = 'grabbing';
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault(); // Allow drop
+
+            const card = e.target.closest('.bot-card');
+            if (card) {
+                card.style.background = '#e3f2fd';
+            }
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+
+            const dropTarget = e.target.closest('.bot-card');
+            if (!dropTarget) return;
+
+            dropTarget.style.background = 'white';
+            const targetBot = dropTarget.dataset.username;
+
+            if (draggedBot && targetBot && draggedBot !== targetBot) {
+                // Force game between draggedBot and targetBot
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'force_game',
+                        player1: draggedBot,
+                        player2: targetBot
+                    }));
+                    // Visual feedback
+                    dropTarget.style.borderColor = '#4CAF50';
+                    setTimeout(() => {
+                        dropTarget.style.borderColor = '#2196F3';
+                    }, 500);
+                } else {
+                    // Connection error - show visual feedback
+                    dropTarget.style.borderColor = '#f44336';
+                    setTimeout(() => {
+                        dropTarget.style.borderColor = '#2196F3';
+                    }, 1000);
+                    alert('WebSocket connection lost. Please refresh the page.');
+                }
+            }
+        }
+
+        function handleDragEnd(e) {
+            const card = e.target.closest('.bot-card');
+            if (card) {
+                card.style.opacity = '1';
+                card.style.cursor = 'grab';
+            }
+            draggedBot = null;
+
+            // Reset all backgrounds
+            document.querySelectorAll('.bot-card').forEach(card => {
+                card.style.background = 'white';
+            });
+        }
+
         function joinGame(gameId) {
             ws.send(JSON.stringify({
                 type: 'join_game',

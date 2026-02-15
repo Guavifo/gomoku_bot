@@ -367,6 +367,53 @@ class ConnectionManager:
             except Exception:
                 game.spectators.discard(spectator)
 
+    async def create_and_start_game(self, game_id: str, player1: str, player2: str,
+                                     player1_color: int) -> GameState:
+        """Create a game and immediately start it with both players.
+
+        Helper method to reduce duplication between normal game flow and forced games.
+        """
+        # Create game state
+        game = GameState(game_id, player1, player2, player1_color)
+        game.player_connections[player1] = self.active_connections[player1]
+        game.player_connections[player2] = self.active_connections[player2]
+
+        # Register both players
+        self.user_to_game[player1] = game_id
+        self.user_to_game[player2] = game_id
+
+        # Reset move timer
+        game.last_move_time = time.time()
+
+        # Add to active games
+        self.active_games[game_id] = game
+
+        # Notify both players
+        await self.send_personal_message({
+            "type": "game_started",
+            "game_id": game_id,
+            "player1": player1,
+            "player2": player2,
+            "your_color": game.player1_color
+        }, player1)
+
+        await self.send_personal_message({
+            "type": "game_started",
+            "game_id": game_id,
+            "player1": player1,
+            "player2": player2,
+            "your_color": game.player2_color
+        }, player2)
+
+        # Send initial game state
+        await self.broadcast_game_update(game)
+
+        # Update lobby and active games lists
+        await self.broadcast_lobby_update()
+        await self.broadcast_active_games_update()
+
+        return game
+
 manager = ConnectionManager()
 
 # Database helper functions
@@ -1093,7 +1140,145 @@ async def websocket_endpoint(websocket: WebSocket):
             
             elif message_type == "list_active_games":
                 await manager.broadcast_active_games_update()
-    
+
+            elif message_type == "get_available_bots":
+                # Query all bots from database that are connected and not in ACTIVE games
+                bots_list = []
+
+                with sqlite3.connect('gomoku.db') as conn:
+                    c = conn.cursor()
+                    c.execute("SELECT username, elo FROM users WHERE is_bot = 1 ORDER BY elo DESC")
+                    all_bots = c.fetchall()
+
+                for bot_username, bot_elo in all_bots:
+                    # Check if bot is connected and NOT in an active game
+                    # Bots in waiting games are OK - we'll cancel their waiting game
+                    if bot_username in manager.active_connections:
+                        game_id = manager.user_to_game.get(bot_username)
+                        # Include if: no game, or in a waiting game (not active)
+                        if not game_id or game_id in manager.waiting_games:
+                            bots_list.append({
+                                "username": bot_username,
+                                "elo": bot_elo
+                            })
+
+                await websocket.send_json({
+                    "type": "available_bots",
+                    "bots": bots_list
+                })
+
+            elif message_type == "force_game":
+                player1_name = message.get("player1")
+                player2_name = message.get("player2")
+
+                # Validate both players exist
+                if not player1_name or not player2_name:
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "INVALID_REQUEST",
+                        "message": "Both player1 and player2 must be specified"
+                    })
+                    continue
+
+                # Check both are bots - single query for efficiency
+                with sqlite3.connect('gomoku.db') as conn:
+                    c = conn.cursor()
+                    c.execute("SELECT username, is_bot FROM users WHERE username IN (?, ?)",
+                             (player1_name, player2_name))
+                    results = {row[0]: row[1] for row in c.fetchall()}
+
+                # Verify both players exist
+                if player1_name not in results or player2_name not in results:
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "PLAYER_NOT_FOUND",
+                        "message": "One or both players not found"
+                    })
+                    continue
+
+                # Verify both are bots
+                if not results[player1_name] or not results[player2_name]:
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "NOT_A_BOT",
+                        "message": "Can only force games between bots"
+                    })
+                    continue
+
+                # Check both are connected
+                if player1_name not in manager.active_connections:
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "PLAYER_OFFLINE",
+                        "message": f"{player1_name} is not connected"
+                    })
+                    continue
+
+                if player2_name not in manager.active_connections:
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "PLAYER_OFFLINE",
+                        "message": f"{player2_name} is not connected"
+                    })
+                    continue
+
+                # Edge case: Check neither is currently in an ACTIVE game
+                # If they're in waiting games, cancel those first
+                validation_failed = False
+                for player_name in [player1_name, player2_name]:
+                    if player_name in manager.user_to_game:
+                        existing_game_id = manager.user_to_game[player_name]
+
+                        # If in an active game, reject
+                        if existing_game_id in manager.active_games:
+                            await websocket.send_json({
+                                "type": "error",
+                                "code": "ALREADY_IN_GAME",
+                                "message": f"{player_name} is already in an active game"
+                            })
+                            validation_failed = True
+                            break
+
+                        # If in a waiting game, cancel it
+                        if existing_game_id in manager.waiting_games:
+                            del manager.waiting_games[existing_game_id]
+                            del manager.user_to_game[player_name]
+                            # Notify the bot that their game was cancelled
+                            await manager.send_personal_message({
+                                "type": "game_cancelled"
+                            }, player_name)
+                            print(f"[FORCE GAME] Cancelled waiting game {existing_game_id} for {player_name}")
+
+                # Skip game creation if validation failed
+                if validation_failed:
+                    continue
+
+                # Create and start game using helper method
+                game_id = str(uuid.uuid4())[:8]
+                player1_color = random.choice([1, 2])
+
+                # Send game_created notification to player1 (bots expect this)
+                await manager.send_personal_message({
+                    "type": "game_created",
+                    "game_id": game_id,
+                    "color": player1_color
+                }, player1_name)
+
+                # Create and start the game
+                game = await manager.create_and_start_game(
+                    game_id, player1_name, player2_name, player1_color
+                )
+
+                # Send game_id back to initiator so they can spectate
+                await websocket.send_json({
+                    "type": "forced_game_created",
+                    "game_id": game_id,
+                    "player1": player1_name,
+                    "player2": player2_name
+                })
+
+                print(f"[FORCED GAME] {username} forced {game.player1} vs {game.player2} (game {game_id})")
+
     except WebSocketDisconnect:
         print(f"[DISCONNECT] {username} disconnected")
     except Exception as e:

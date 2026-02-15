@@ -27,8 +27,10 @@ A FastAPI + WebSocket server that orchestrates everything:
 - Places **3 random opening stones** in the center before players take turns
 - Tracks player stats and **ELO ratings** in a SQLite database
 - Supports **spectators** watching games in real time
+- **Force bot matches** via drag-and-drop UI for testing specific matchups
 - Saves completed games to text files with full move history
 - **60-second move timeout** per turn
+- **Game analytics** via `analyze_games.py` — generates statistics on win rates, game lengths, and outcomes
 
 ### Easy Bot (`easy_bot/`)
 

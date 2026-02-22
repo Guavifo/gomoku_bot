@@ -399,6 +399,23 @@
                             <p class="status">Loading bots...</p>
                         </div>
                     </div>
+                    <div style="margin-top: 15px; border-top: 1px solid #ddd; padding-top: 15px;">
+                        <div style="font-weight: bold; margin-bottom: 8px;">Round Robin</div>
+                        <div style="color: #666; font-size: 14px; margin-bottom: 10px;">
+                            Start games between all available bot pairs that have played each other fewer times than the threshold.
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="font-size: 14px;">Threshold:</label>
+                            <input type="number" id="roundRobinThreshold" value="5" min="1"
+                                   style="width: 60px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px;">
+                            <button id="roundRobinBtn" onclick="triggerRoundRobin()"
+                                    style="padding: 8px 16px; background: #FF9800; color: white; border: none;
+                                           border-radius: 4px; cursor: pointer; font-weight: bold;">
+                                Round Robin
+                            </button>
+                        </div>
+                        <div id="roundRobinStatus" style="margin-top: 8px; font-size: 13px; color: #666;"></div>
+                    </div>
                 </div>
             </div>
             
@@ -745,6 +762,27 @@
                         }));
                     }
                     break;
+
+                case 'round_robin_result': {
+                    const statusEl = document.getElementById('roundRobinStatus');
+                    const btn = document.getElementById('roundRobinBtn');
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                    btn.style.cursor = 'pointer';
+                    if (message.status === 'started') {
+                        statusEl.style.color = '#4CAF50';
+                        const n = message.games_started.length;
+                        const pairs = message.games_started.map(g => `${g.player1} vs ${g.player2}`).join(', ');
+                        statusEl.textContent = `Started ${n} game${n !== 1 ? 's' : ''}: ${pairs}`;
+                    } else if (message.status === 'no_pairs') {
+                        statusEl.style.color = '#f44336';
+                        statusEl.textContent = `All bots have already played each other ${message.games_played} times`;
+                    } else {
+                        statusEl.style.color = '#f44336';
+                        statusEl.textContent = message.message || 'No eligible pairs found.';
+                    }
+                    break;
+                }
                 
                 case 'game_created':
                     currentGame = {
@@ -897,8 +935,8 @@
                         </div>
                         <div>
                             <span style="font-weight: bold;">${entry.elo} ELO</span> | 
-                            ${entry.games_played} games | 
-                            ${entry.wins}W-${entry.losses}L (${entry.win_rate}%)
+                            ${entry.games_played} games |
+                            ${entry.wins}W-${entry.losses}L${entry.draws > 0 ? `-${entry.draws}D` : ''} (${entry.win_rate}% of decisive)
                         </div>
                     </div>
                 `).join('');
@@ -926,6 +964,21 @@
                 ws.send(JSON.stringify({ type: 'get_available_bots' }));
             }
         });
+
+        function triggerRoundRobin() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                document.getElementById('roundRobinStatus').textContent = 'Not connected.';
+                return;
+            }
+            const btn = document.getElementById('roundRobinBtn');
+            btn.disabled = true;
+            btn.style.opacity = '0.5';
+            btn.style.cursor = 'default';
+            const threshold = parseInt(document.getElementById('roundRobinThreshold').value) || 1;
+            document.getElementById('roundRobinStatus').textContent = 'Finding pairs of bots...';
+            document.getElementById('roundRobinStatus').style.color = '#666';
+            ws.send(JSON.stringify({ type: 'round_robin', threshold }));
+        }
 
         // Handle available_bots message
         function updateAvailableBots(bots) {

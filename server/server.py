@@ -474,6 +474,11 @@ def calculate_elo_change(winner_elo: int, loser_elo: int, winner_games: int, los
 
 def update_game_result(game: GameState):
     """Update database with game result and ELO changes"""
+    # Guard against duplicate saves (e.g. two players disconnecting simultaneously)
+    with sqlite3.connect('gomoku.db') as conn:
+        if conn.execute("SELECT 1 FROM games WHERE game_id = ?", (game.game_id,)).fetchone():
+            return
+
     if game.winner is None:
         # Draw - no ELO change
         conn = sqlite3.connect('gomoku.db')
@@ -494,7 +499,7 @@ def update_game_result(game: GameState):
         timestamp = datetime.fromtimestamp(game.start_time).isoformat()
         filename = save_game_to_file(game, player1_elo, player2_elo, player1_elo, player2_elo)
         
-        c.execute('''INSERT INTO games 
+        c.execute('''INSERT OR IGNORE INTO games
                      (game_id, player1, player2, player1_color, winner, outcome, 
                       player1_elo_before, player2_elo_before, player1_elo_after, player2_elo_after,
                       timestamp, filepath)
@@ -553,7 +558,7 @@ def update_game_result(game: GameState):
     filename = save_game_to_file(game, player1_elo_before, player2_elo_before, 
                                   player1_elo_after, player2_elo_after)
     
-    c.execute('''INSERT INTO games 
+    c.execute('''INSERT OR IGNORE INTO games
                  (game_id, player1, player2, player1_color, winner, outcome, 
                   player1_elo_before, player2_elo_before, player1_elo_after, player2_elo_after,
                   timestamp, filepath)
@@ -565,7 +570,7 @@ def update_game_result(game: GameState):
     conn.commit()
     conn.close()
     
-    print(f"[GAME END] {winner} defeats {loser}. ELO: {winner} {winner_elo}→{new_winner_elo} (+{winner_change}), {loser} {loser_elo}→{new_loser_elo} ({loser_change})")
+    print(f"[GAME END] {winner} defeats {loser}. ELO: {winner} {winner_elo}->{new_winner_elo} (+{winner_change}), {loser} {loser_elo}->{new_loser_elo} ({loser_change})")
 
 def save_game_to_file(game: GameState, p1_elo_before: int, p2_elo_before: int,
                        p1_elo_after: int, p2_elo_after: int) -> str:
@@ -805,13 +810,15 @@ async def get_leaderboard():
     leaderboard = []
     for row in results:
         username, elo, games_played, wins, losses, is_bot = row
-        win_rate = (wins / games_played * 100) if games_played > 0 else 0
+        decisive = wins + losses
+        win_rate = (wins / decisive * 100) if decisive > 0 else 0
         leaderboard.append({
             "username": username,
             "elo": elo,
             "games_played": games_played,
             "wins": wins,
             "losses": losses,
+            "draws": games_played - wins - losses,
             "win_rate": round(win_rate, 1),
             "is_bot": bool(is_bot)
         })
@@ -1243,10 +1250,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         if existing_game_id in manager.waiting_games:
                             del manager.waiting_games[existing_game_id]
                             del manager.user_to_game[player_name]
-                            # Notify the bot that their game was cancelled
-                            await manager.send_personal_message({
-                                "type": "game_cancelled"
-                            }, player_name)
                             print(f"[FORCE GAME] Cancelled waiting game {existing_game_id} for {player_name}")
 
                 # Skip game creation if validation failed
@@ -1278,6 +1281,115 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
 
                 print(f"[FORCED GAME] {username} forced {game.player1} vs {game.player2} (game {game_id})")
+
+            elif message_type == "round_robin":
+                try:
+                    threshold = int(message.get("threshold", 1))
+                except (ValueError, TypeError):
+                    threshold = 1
+
+                # Get all bots from DB
+                with sqlite3.connect('gomoku.db') as conn:
+                    conn.row_factory = sqlite3.Row
+                    bot_rows = conn.execute("SELECT username FROM users WHERE is_bot = 1").fetchall()
+                all_bots = [row["username"] for row in bot_rows]
+
+                # Filter to connected + available bots
+                available = []
+                for bot in all_bots:
+                    if bot not in manager.active_connections:
+                        continue
+                    if bot in manager.user_to_game and manager.user_to_game[bot] in manager.active_games:
+                        continue
+                    available.append(bot)
+
+                if len(available) < 2:
+                    await websocket.send_json({
+                        "type": "round_robin_result",
+                        "status": "error",
+                        "message": f"Need at least 2 available bots, found {len(available)}"
+                    })
+                    continue
+
+                # Query game counts for pairs among available bots
+                placeholders = ",".join("?" * len(available))
+                with sqlite3.connect('gomoku.db') as conn:
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute(
+                        f"SELECT player1, player2, COUNT(*) as cnt FROM games "
+                        f"WHERE player1 IN ({placeholders}) AND player2 IN ({placeholders}) "
+                        f"GROUP BY player1, player2",
+                        available + available
+                    ).fetchall()
+
+                game_counts = {}
+                for row in rows:
+                    key = (min(row["player1"], row["player2"]), max(row["player1"], row["player2"]))
+                    game_counts[key] = game_counts.get(key, 0) + row["cnt"]
+
+                # Build list of all eligible pairs sorted by games played ascending
+                eligible_pairs = []
+                for i in range(len(available)):
+                    for j in range(i + 1, len(available)):
+                        a, b = available[i], available[j]
+                        key = (min(a, b), max(a, b))
+                        cnt = game_counts.get(key, 0)
+                        if cnt < threshold:
+                            eligible_pairs.append((cnt, a, b))
+                eligible_pairs.sort(key=lambda x: x[0])
+
+                if not eligible_pairs:
+                    min_count = min(
+                        game_counts.get((min(available[i], available[j]), max(available[i], available[j])), 0)
+                        for i in range(len(available)) for j in range(i + 1, len(available))
+                    )
+                    await websocket.send_json({
+                        "type": "round_robin_result",
+                        "status": "no_pairs",
+                        "games_played": min_count
+                    })
+                    continue
+
+                # Greedily assign bots to games (each bot can only play once per round)
+                used = set()
+                games_started = []
+                waiting_games_cancelled = False
+                for cnt, a, b in eligible_pairs:
+                    if a in used or b in used:
+                        continue
+                    used.add(a)
+                    used.add(b)
+
+                    # Cancel any waiting games for these bots
+                    for player_name in [a, b]:
+                        if player_name in manager.user_to_game:
+                            existing_game_id = manager.user_to_game[player_name]
+                            if existing_game_id in manager.waiting_games:
+                                del manager.waiting_games[existing_game_id]
+                                del manager.user_to_game[player_name]
+                                waiting_games_cancelled = True
+
+                    game_id = str(uuid.uuid4())[:8]
+                    p1_color = random.choice([1, 2])
+
+                    await manager.send_personal_message({
+                        "type": "game_created",
+                        "game_id": game_id,
+                        "color": p1_color
+                    }, a)
+
+                    await manager.create_and_start_game(game_id, a, b, p1_color)
+                    games_started.append({"player1": a, "player2": b, "games_played": cnt})
+                    print(f"[ROUND ROBIN] {username} triggered {a} vs {b} (played {cnt} times)")
+
+                if waiting_games_cancelled:
+                    await manager.broadcast_lobby_update()
+
+                await websocket.send_json({
+                    "type": "round_robin_result",
+                    "status": "started",
+                    "games_started": games_started
+                })
 
     except WebSocketDisconnect:
         print(f"[DISCONNECT] {username} disconnected")

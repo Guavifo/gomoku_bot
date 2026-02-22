@@ -1,3 +1,15 @@
+## 2026-02-21
+*Added Round Robin button to automate bot matchmaking and fixed several bugs.*
+- Added `round_robin` WebSocket handler — starts games between all available bot pairs below a game-count threshold, greedily pairing to maximize concurrent games
+- Added Round Robin UI panel in Force Bot Match Mode — threshold input, orange button, status text with disable-on-click feedback
+- Bots now always create new rooms instead of randomly joining existing ones — Round Robin is the sole matchmaking mechanism
+- Fixed double ELO update bug — `update_game_result` now checks DB for existing game_id and returns early to prevent duplicate saves on concurrent disconnects
+- Fixed `INSERT INTO` → `INSERT OR IGNORE INTO` as secondary guard against duplicate game records
+- Fixed missing `broadcast_lobby_update()` after Round Robin cancels waiting games
+- Fixed leaderboard win rate to exclude draws — now shows W/L/D separately, percentage is wins/(wins+losses)
+- Fixed Windows console crash — replaced Unicode `→` arrow with `->` in game-end log line
+- Removed unnecessary `game_cancelled` message sent to bots during force game/round robin
+
 ## 2026-02-14
 *Created game statistics analyzer and improved code quality with code review fixes.*
 - Added `analyze_games.py` script — generates aggregate statistics from saved game files

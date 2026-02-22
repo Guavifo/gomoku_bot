@@ -138,7 +138,7 @@ class GomokuBot:
             code = message.get("code")
             error_message = message.get("message")
             print(f"[ERROR] {code}: {error_message}")
-            
+
             if code == "ALREADY_IN_GAME":
                 # Already in a game, wait for updates
                 pass
@@ -147,15 +147,9 @@ class GomokuBot:
                 await self.find_game()
     
     async def find_game(self):
-        """Find a game to join or create one"""
-        # Randomly decide whether to join or create (50/50)
-        if random.random() < 0.5:
-            # Try to join existing game
-            await self.send_message({"type": "list_lobby"})
-        else:
-            # Create new game
-            print(f"[BOT] Creating new game")
-            await self.send_message({"type": "create_game"})
+        """Create a new game and wait for an opponent"""
+        print(f"[BOT] Creating new game")
+        await self.send_message({"type": "create_game"})
     
     def reset_game_state(self):
         """Reset game state for next game"""

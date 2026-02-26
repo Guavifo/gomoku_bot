@@ -413,6 +413,11 @@
                                            border-radius: 4px; cursor: pointer; font-weight: bold;">
                                 Round Robin
                             </button>
+                            <button id="autoRoundRobinBtn" onclick="toggleAutoRoundRobin()"
+                                    style="padding: 8px 16px; background: #4CAF50; color: white; border: none;
+                                           border-radius: 4px; cursor: pointer; font-weight: bold;">
+                                Start Auto
+                            </button>
                         </div>
                         <div id="roundRobinStatus" style="margin-top: 8px; font-size: 13px; color: #666;"></div>
                     </div>
@@ -775,12 +780,19 @@
                         const pairs = message.games_started.map(g => `${g.player1} vs ${g.player2}`).join(', ');
                         statusEl.textContent = `Started ${n} game${n !== 1 ? 's' : ''}: ${pairs}`;
                     } else if (message.status === 'no_pairs') {
-                        statusEl.style.color = '#f44336';
-                        statusEl.textContent = `All bots have already played each other ${message.games_played} times`;
+                        if (message.bots_busy) {
+                            statusEl.style.color = '#FF9800';
+                            const threshold = parseInt(document.getElementById('roundRobinThreshold').value) || 1;
+                            statusEl.textContent = `All bots busy (min ${message.games_played}/${threshold} games) — waiting...`;
+                        } else {
+                            statusEl.style.color = '#2196F3';
+                            statusEl.textContent = `Tournament complete — all pairs played ${message.games_played} times`;
+                        }
                     } else {
                         statusEl.style.color = '#f44336';
                         statusEl.textContent = message.message || 'No eligible pairs found.';
                     }
+                    handleAutoRoundRobinResult(message);
                     break;
                 }
                 
@@ -964,6 +976,54 @@
                 ws.send(JSON.stringify({ type: 'get_available_bots' }));
             }
         });
+
+        let autoRoundRobinActive = false;
+
+        function toggleAutoRoundRobin() {
+            if (autoRoundRobinActive) {
+                stopAutoRoundRobin();
+            } else {
+                startAutoRoundRobin();
+            }
+        }
+
+        function startAutoRoundRobin() {
+            autoRoundRobinActive = true;
+            const autoBtn = document.getElementById('autoRoundRobinBtn');
+            autoBtn.textContent = 'Stop Auto';
+            autoBtn.style.background = '#f44336';
+            document.getElementById('roundRobinStatus').textContent = 'Auto mode active...';
+            document.getElementById('roundRobinStatus').style.color = '#666';
+            triggerRoundRobin();
+        }
+
+        function stopAutoRoundRobin() {
+            autoRoundRobinActive = false;
+            const autoBtn = document.getElementById('autoRoundRobinBtn');
+            autoBtn.textContent = 'Start Auto';
+            autoBtn.style.background = '#4CAF50';
+        }
+
+        function handleAutoRoundRobinResult(message) {
+            if (!autoRoundRobinActive) return;
+            if (message.status === 'no_pairs') {
+                if (message.bots_busy) {
+                    // Some bots are still playing — wait and retry
+                    setTimeout(() => {
+                        if (autoRoundRobinActive) triggerRoundRobin();
+                    }, 5000);
+                } else {
+                    // No bots busy and no eligible pairs — truly done
+                    stopAutoRoundRobin();
+                }
+                return;
+            }
+            // For 'started' or 'error' (not enough bots connected), retry after a delay
+            const delay = message.status === 'error' ? 5000 : 2000;
+            setTimeout(() => {
+                if (autoRoundRobinActive) triggerRoundRobin();
+            }, delay);
+        }
 
         function triggerRoundRobin() {
             if (!ws || ws.readyState !== WebSocket.OPEN) {

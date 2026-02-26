@@ -43,7 +43,7 @@ class GomokuBot:
     async def connect(self):
         """Connect to the game server"""
         print(f"[BOT] Connecting to {SERVER_URL}...")
-        self.ws = await websockets.connect(SERVER_URL)
+        self.ws = await websockets.connect(SERVER_URL, max_size=10 * 1024 * 1024)
         
         # Authenticate
         await self.send_message({

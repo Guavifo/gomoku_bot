@@ -1,3 +1,14 @@
+## 2026-02-25
+*Fixed bot disconnects, self-matches, and server slowdown; added auto round robin loop.*
+- Added "Start Auto" button for round robin — loops automatically until all pairs meet the threshold, retrying while bots are busy
+- Fixed auto loop stopping early — server now sends `bots_busy` flag so client can distinguish "all done" from "all bots currently playing"
+- Fixed WebSocket 1009 errors — raised `max_size` to 10 MB on both server (`uvicorn`) and all bot clients (`websockets.connect`)
+- Fixed bots playing themselves — added self-match guard in `create_and_start_game` and in the join-game path
+- Improved server memory usage — `move_count` is now cached on `GameState` instead of recomputed on every broadcast
+- Added `GameState.finalize()` — clears `board`, `move_history`, `spectators`, and `player_connections` when a game ends
+- Capped `completed_games` in memory to last 100 games or 24 hours, whichever is less
+- Startup load no longer reconstructs board from file — only computes `move_count` for the lobby display
+
 ## 2026-02-21
 *Added Round Robin button to automate bot matchmaking and fixed several bugs.*
 - Added `round_robin` WebSocket handler — starts games between all available bot pairs below a game-count threshold, greedily pairing to maximize concurrent games

@@ -101,6 +101,7 @@ class GameState:
         self.player_connections: Dict[str, WebSocket] = {}
         self.end_time = None
         self.elo_changes = {}  # Store ELO changes: {username: change_amount}
+        self.move_count = 0  # Cached non-opening move count (set when game ends)
 
         # Generate random opening (3 stones in center 5x5) for new games
         if generate_opening:
@@ -149,6 +150,7 @@ class GameState:
             "color": color,
             "is_opening": False
         })
+        self.move_count += 1
         self.last_move_time = time.time()
         
         # Check for win
@@ -197,6 +199,13 @@ class GameState:
         
         return False
     
+    def finalize(self):
+        """Free heavy per-game data after a game ends, keeping only what's needed for the lobby."""
+        self.move_history = []
+        self.board = []
+        self.spectators = set()
+        self.player_connections = {}
+
     def get_current_player(self) -> str:
         """Get the username of the player whose turn it is"""
         if self.current_turn == self.player1_color:
@@ -296,7 +305,7 @@ class ConnectionManager:
                 "player2_elo": player2_elo,
                 "player1_color": game.player1_color,
                 "combined_elo": player1_elo + player2_elo,
-                "move_count": len([m for m in game.move_history if not m.get("is_opening", False)]),
+                "move_count": game.move_count,
                 "spectator_count": len(game.spectators),
                 "status": "active",
                 "current_turn": game.get_current_player()
@@ -317,7 +326,7 @@ class ConnectionManager:
                     "player2_elo": player2_elo,
                     "player1_color": game.player1_color,
                     "combined_elo": player1_elo + player2_elo,
-                    "move_count": len([m for m in game.move_history if not m.get("is_opening", False)]),
+                    "move_count": game.move_count,
                     "spectator_count": len(game.spectators),
                     "status": "completed",
                     "winner": game.winner,
@@ -373,6 +382,10 @@ class ConnectionManager:
 
         Helper method to reduce duplication between normal game flow and forced games.
         """
+        if player1 == player2:
+            print(f"[ERROR] Attempted to create self-match for {player1}, ignoring")
+            return None
+
         # Create game state
         game = GameState(game_id, player1, player2, player1_color)
         game.player_connections[player1] = self.active_connections[player1]
@@ -685,23 +698,21 @@ def load_recent_completed_games() -> None:
 
         # Create GameState without generating random opening
         game = GameState(game_id, player1, player2, player1_color, generate_opening=False)
-        game.move_history = move_history
+        game.move_count = len([m for m in move_history if not m.get("is_opening", False)])
         game.game_over = True
         game.winner = winner
         game.outcome = outcome
 
-        # Reconstruct the board from move history
-        for move in move_history:
-            game.board[move['row']][move['col']] = move['color']
-
         # Parse timestamp to get completion time
         completion_time = datetime.fromisoformat(timestamp_str).timestamp()
 
-        # Add to completed games
+        # Add to completed games (already finalized — no board/move_history needed)
         manager.completed_games.append((game, completion_time))
         loaded_count += 1
 
-    print(f"[STARTUP] Loaded {loaded_count} completed games from the last 24 hours")
+    # Apply the memory cap after loading
+    _trim_completed_games()
+    print(f"[STARTUP] Loaded {min(loaded_count, 100)} completed games from the last 24 hours")
 
 # Background tasks
 async def heartbeat_task():
@@ -740,29 +751,40 @@ async def timeout_check_task():
                 await manager.broadcast_game_update(game)
                 
                 # Move to completed games
-                manager.completed_games.append((game, time.time()))
+                add_completed_game(game)
                 del manager.active_games[game_id]
-                
+
                 # Remove from user_to_game mapping
                 if game.player1 in manager.user_to_game:
                     del manager.user_to_game[game.player1]
                 if game.player2 in manager.user_to_game:
                     del manager.user_to_game[game.player2]
-                
+
                 # Update active games list
                 await manager.broadcast_active_games_update()
 
 async def cleanup_completed_games_task():
-    """Remove completed games from memory after POST_GAME_MEMORY seconds"""
+    """Remove completed games from memory after POST_GAME_MEMORY seconds, keeping at most 100."""
     while True:
         await asyncio.sleep(60)  # Check every minute
-        
-        current_time = time.time()
-        manager.completed_games = [
-            (game, completion_time)
-            for game, completion_time in manager.completed_games
-            if current_time - completion_time <= POST_GAME_MEMORY
-        ]
+        _trim_completed_games()
+
+
+def _trim_completed_games():
+    """Keep only games within the last 24 hours, capped at 100 most recent."""
+    current_time = time.time()
+    cutoff = current_time - POST_GAME_MEMORY
+    recent = [(g, t) for g, t in manager.completed_games if t > cutoff]
+    # Sort newest first, keep at most 100
+    recent.sort(key=lambda x: x[1], reverse=True)
+    manager.completed_games = recent[:100]
+
+
+def add_completed_game(game: "GameState"):
+    """Finalize a game, add it to completed_games, and enforce the memory cap."""
+    game.finalize()
+    manager.completed_games.append((game, time.time()))
+    _trim_completed_games()
 
 # HTTP endpoints
 @app.post("/register")
@@ -925,7 +947,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
                 
                 game = manager.waiting_games[game_id]
-                
+
+                # Prevent self-match
+                if game.player1 == username:
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "SELF_MATCH",
+                        "message": "Cannot join your own game"
+                    })
+                    continue
+
                 # Join game
                 game.player2 = username
                 game.player_connections[username] = websocket
@@ -1021,7 +1052,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         await manager.broadcast_game_update(game)
 
                         # Move to completed games
-                        manager.completed_games.append((game, time.time()))
+                        add_completed_game(game)
                         del manager.active_games[game_id]
 
                         # Remove from user_to_game mapping
@@ -1084,18 +1115,18 @@ async def websocket_endpoint(websocket: WebSocket):
                     await manager.broadcast_game_update(game)
                     
                     # Move to completed games
-                    manager.completed_games.append((game, time.time()))
+                    add_completed_game(game)
                     del manager.active_games[game_id]
-                    
+
                     # Remove from user_to_game mapping
                     if game.player1 in manager.user_to_game:
                         del manager.user_to_game[game.player1]
                     if game.player2 in manager.user_to_game:
                         del manager.user_to_game[game.player2]
-                    
+
                     # Update active games list
                     await manager.broadcast_active_games_update()
-                    
+
                     print(f"[RESIGNATION] {username} resigned from game {game_id}")
             
             elif message_type == "spectate":
@@ -1343,10 +1374,15 @@ async def websocket_endpoint(websocket: WebSocket):
                         game_counts.get((min(available[i], available[j]), max(available[i], available[j])), 0)
                         for i in range(len(available)) for j in range(i + 1, len(available))
                     )
+                    bots_busy = any(
+                        bot in manager.user_to_game and manager.user_to_game[bot] in manager.active_games
+                        for bot in all_bots if bot in manager.active_connections
+                    )
                     await websocket.send_json({
                         "type": "round_robin_result",
                         "status": "no_pairs",
-                        "games_played": min_count
+                        "games_played": min_count,
+                        "bots_busy": bots_busy
                     })
                     continue
 
@@ -1423,15 +1459,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     await manager.broadcast_game_update(game)
                     
                     # Move to completed games
-                    manager.completed_games.append((game, time.time()))
+                    add_completed_game(game)
                     del manager.active_games[game_id]
-                    
+
                     # Remove from user_to_game mapping
                     if game.player1 in manager.user_to_game:
                         del manager.user_to_game[game.player1]
                     if game.player2 in manager.user_to_game:
                         del manager.user_to_game[game.player2]
-                    
+
                     # Update active games list
                     await manager.broadcast_active_games_update()
 
@@ -1440,4 +1476,4 @@ app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, ws_max_size=10 * 1024 * 1024)  # 10 MB

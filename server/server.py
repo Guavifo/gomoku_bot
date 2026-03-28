@@ -102,6 +102,10 @@ class GameState:
         self.end_time = None
         self.elo_changes = {}  # Store ELO changes: {username: change_amount}
         self.move_count = 0  # Cached non-opening move count (set when game ends)
+        self.player1_elo_before = None
+        self.player1_elo_after = None
+        self.player2_elo_before = None
+        self.player2_elo_after = None
 
         # Generate random opening (3 stones in center 5x5) for new games
         if generate_opening:
@@ -200,9 +204,7 @@ class GameState:
         return False
     
     def finalize(self):
-        """Free heavy per-game data after a game ends, keeping only what's needed for the lobby."""
-        self.move_history = []
-        self.board = []
+        """Release player connections after a game ends; board and move_history are kept for spectating."""
         self.spectators = set()
         self.player_connections = {}
 
@@ -503,6 +505,10 @@ def update_game_result(game: GameState):
         # Store zero ELO changes for draw
         game.elo_changes[game.player1] = 0
         game.elo_changes[game.player2] = 0
+        game.player1_elo_before = player1_elo
+        game.player1_elo_after = player1_elo
+        game.player2_elo_before = player2_elo
+        game.player2_elo_after = player2_elo
         
         # Update games played
         c.execute("UPDATE users SET games_played = games_played + 1 WHERE username IN (?, ?)",
@@ -543,30 +549,35 @@ def update_game_result(game: GameState):
     # Store ELO changes in game object for client display
     game.elo_changes[winner] = winner_change
     game.elo_changes[loser] = loser_change
-    
+
     # Update database
     conn = sqlite3.connect('gomoku.db')
     c = conn.cursor()
-    
+
     # Update winner
-    c.execute('''UPDATE users 
+    c.execute('''UPDATE users
                  SET elo = ?, games_played = games_played + 1, wins = wins + 1
                  WHERE username = ?''',
               (new_winner_elo, winner))
-    
+
     # Update loser
-    c.execute('''UPDATE users 
+    c.execute('''UPDATE users
                  SET elo = ?, games_played = games_played + 1, losses = losses + 1
                  WHERE username = ?''',
               (new_loser_elo, loser))
-    
+
     # Save game record
     timestamp = datetime.fromtimestamp(game.start_time).isoformat()
-    
+
     player1_elo_before = winner_elo if winner == game.player1 else loser_elo
     player2_elo_before = loser_elo if winner == game.player1 else winner_elo
     player1_elo_after = new_winner_elo if winner == game.player1 else new_loser_elo
     player2_elo_after = new_loser_elo if winner == game.player1 else new_winner_elo
+
+    game.player1_elo_before = player1_elo_before
+    game.player1_elo_after = player1_elo_after
+    game.player2_elo_before = player2_elo_before
+    game.player2_elo_after = player2_elo_after
     
     filename = save_game_to_file(game, player1_elo_before, player2_elo_before, 
                                   player1_elo_after, player2_elo_after)
@@ -645,7 +656,9 @@ def load_recent_completed_games() -> None:
     with sqlite3.connect('gomoku.db') as conn:
         c = conn.cursor()
         c.execute('''SELECT game_id, player1, player2, player1_color, winner, outcome,
-                            timestamp, filepath
+                            timestamp, filepath,
+                            player1_elo_before, player1_elo_after,
+                            player2_elo_before, player2_elo_after
                      FROM games
                      WHERE timestamp > ?
                      ORDER BY timestamp DESC''', (cutoff_datetime,))
@@ -653,7 +666,8 @@ def load_recent_completed_games() -> None:
 
     loaded_count = 0
     for row in results:
-        game_id, player1, player2, player1_color, winner, outcome, timestamp_str, filepath = row
+        (game_id, player1, player2, player1_color, winner, outcome, timestamp_str, filepath,
+         p1_elo_before, p1_elo_after, p2_elo_before, p2_elo_after) = row
 
         # Parse the game file to get move history
         move_history = []
@@ -698,15 +712,28 @@ def load_recent_completed_games() -> None:
 
         # Create GameState without generating random opening
         game = GameState(game_id, player1, player2, player1_color, generate_opening=False)
+        game.move_history = move_history
         game.move_count = len([m for m in move_history if not m.get("is_opening", False)])
         game.game_over = True
         game.winner = winner
         game.outcome = outcome
+        game.player1_elo_before = p1_elo_before
+        game.player1_elo_after = p1_elo_after
+        game.player2_elo_before = p2_elo_before
+        game.player2_elo_after = p2_elo_after
+        if p1_elo_before is not None and p1_elo_after is not None:
+            game.elo_changes[player1] = p1_elo_after - p1_elo_before
+        if p2_elo_before is not None and p2_elo_after is not None:
+            game.elo_changes[player2] = p2_elo_after - p2_elo_before
+
+        # Reconstruct the board by replaying all moves
+        for move in move_history:
+            game.board[move["row"]][move["col"]] = move["color"]
 
         # Parse timestamp to get completion time
         completion_time = datetime.fromisoformat(timestamp_str).timestamp()
 
-        # Add to completed games (already finalized — no board/move_history needed)
+        # Add to completed games
         manager.completed_games.append((game, completion_time))
         loaded_count += 1
 
@@ -1167,7 +1194,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     "current_player": game.get_current_player() if not game.game_over else None,
                     "game_over": game.game_over,
                     "winner": game.winner,
-                    "outcome": game.outcome
+                    "outcome": game.outcome,
+                    "elo_changes": game.elo_changes,
+                    "player1_elo_before": game.player1_elo_before,
+                    "player1_elo_after": game.player1_elo_after,
+                    "player2_elo_before": game.player2_elo_before,
+                    "player2_elo_after": game.player2_elo_after
                 }
                 await websocket.send_json(message)
                 

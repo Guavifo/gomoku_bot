@@ -1,3 +1,11 @@
+## 2026-03-28
+*Fixed completed game spectating — board, move history, and ELO data now load correctly when clicking a finished game.*
+- Fixed `GameState.finalize()` — no longer clears `board` or `move_history`; only resets connections/spectators so games remain viewable after completion
+- Fixed `load_recent_completed_games` — now assigns `move_history` to game object, reconstructs board by replaying moves, and loads ELO before/after from DB
+- Added `player1/2_elo_before/after` fields to `GameState` — populated in `update_game_result` for live games and from DB for loaded games
+- Fixed `UnboundLocalError` in `update_game_result` — ELO field assignments were placed before the local variables were defined, silently crashing game resolution and preventing ELO updates
+- `spectate_game` WebSocket message now includes `elo_changes`, `player1_elo_before/after`, `player2_elo_before/after`
+
 ## 2026-02-25
 *Fixed bot disconnects, self-matches, and server slowdown; added auto round robin loop.*
 - Added "Start Auto" button for round robin — loops automatically until all pairs meet the threshold, retrying while bots are busy

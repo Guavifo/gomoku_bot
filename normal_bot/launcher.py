@@ -11,7 +11,7 @@ def load_config():
         with open(CONFIG_FILE, 'r') as f:
             return json.load(f)
     return {
-        "server_url": "ws://localhost:8000/ws",
+        "server_url": "ws://localhost:8765/ws",
         "username": "",
         "token": ""
     }
@@ -28,12 +28,12 @@ def create_account():
     
     print("\n=== Create New Bot Account ===")
     print("Note: The server must be running before creating an account.")
-    print("      Test in your browser first: http://localhost:8000")
+    print("      Test in your browser first: http://localhost:8765")
     
     # Get server URL
-    server_url = input(f"\nServer URL (default: http://localhost:8000): ").strip()
+    server_url = input(f"\nServer URL (default: http://localhost:8765): ").strip()
     if not server_url:
-        server_url = "http://localhost:8000"
+        server_url = "http://localhost:8765"
     
     # Get username
     username = input("Enter bot username: ").strip()
@@ -68,14 +68,14 @@ def create_account():
         print(f"\n  Troubleshooting:")
         print(f"  1. Check if server is running: python server.py")
         print(f"  2. Try accessing in browser: {server_url}")
-        print(f"  3. If on different computer, use IP address: http://192.168.x.x:8000")
+        print(f"  3. If on different computer, use IP address: http://192.168.x.x:8765")
     except requests.exceptions.ConnectionError:
         print(f"\n✗ Error: Could not connect to server at {server_url}")
         print(f"  The server is not accessible at this address.")
         print(f"\n  Troubleshooting:")
         print(f"  1. Check if server is running: python server.py")
         print(f"  2. Try accessing in browser: {server_url}")
-        print(f"  3. If on different computer, use IP address: http://192.168.x.x:8000")
+        print(f"  3. If on different computer, use IP address: http://192.168.x.x:8765")
         print(f"  4. Try http://127.0.0.1:8000 instead of localhost")
     except Exception as e:
         print(f"\n✗ Error: {e}")

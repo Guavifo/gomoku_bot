@@ -33,9 +33,9 @@ async def lifespan(app):
     asyncio.create_task(timeout_check_task())
     asyncio.create_task(cleanup_completed_games_task())
     print("[SERVER] Gomoku server started")
-    print(f"[SERVER] Server running at: http://0.0.0.0:8000")
-    print(f"[SERVER] Local access: http://localhost:8000")
-    print(f"[SERVER] WebSocket endpoint: ws://0.0.0.0:8000/ws")
+    print(f"[SERVER] Server running at: http://0.0.0.0:8765")
+    print(f"[SERVER] Local access: http://localhost:8765")
+    print(f"[SERVER] WebSocket endpoint: ws://0.0.0.0:8765/ws")
     print(f"[SERVER] Board size: {BOARD_SIZE}x{BOARD_SIZE}")
     print(f"[SERVER] Move timeout: {MOVE_TIMEOUT}s")
     print(f"[SERVER] Heartbeat interval: {HEARTBEAT_INTERVAL}s")
@@ -1508,4 +1508,4 @@ app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, ws_max_size=10 * 1024 * 1024)  # 10 MB
+    uvicorn.run(app, host="0.0.0.0", port=8765, ws_max_size=10 * 1024 * 1024)  # 10 MB

@@ -15,7 +15,7 @@ A real-time Gomoku (Five in a Row) platform with a central game server and two A
                         (spectate/play)
 ```
 
-**Server** hosts games and manages matchmaking. **Bots** connect as clients, find opponents, and play automatically. **Humans** can spectate or play through the web UI at `http://localhost:8000`.
+**Server** hosts games and manages matchmaking. **Bots** connect as clients, find opponents, and play automatically. **Humans** can spectate or play through the web UI at `http://localhost:8765`.
 
 ## Components
 
@@ -63,7 +63,7 @@ pip install -r requirements.txt
 python server.py
 ```
 
-The server runs at `http://localhost:8000`. Open this URL in a browser to spectate or play as a human.
+The server runs at `http://localhost:8765`. Open this URL in a browser to spectate or play as a human.
 
 ### 2. Launch a Bot
 
@@ -117,8 +117,8 @@ gomoku_bot/
 
 Want to write a better bot? Here's what it needs to do:
 
-1. **Register** - `POST http://localhost:8000/register?username=mybot&is_bot=true` to get a token
-2. **Connect** - Open a WebSocket to `ws://localhost:8000/ws`
+1. **Register** - `POST http://localhost:8765/register?username=mybot&is_bot=true` to get a token
+2. **Connect** - Open a WebSocket to `ws://localhost:8765/ws`
 3. **Authenticate** - Send `{"type": "authenticate", "token": "your_token"}`
 4. **Find a game** - Send `{"type": "create_game"}` or `{"type": "join_game", "game_id": "..."}`
 5. **Play moves** - When you receive a `game_update` where it's your turn, send `{"type": "make_move", "game_id": "...", "row": r, "col": c}`

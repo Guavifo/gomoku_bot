@@ -11,7 +11,7 @@ def load_config():
         with open(CONFIG_FILE, 'r') as f:
             return json.load(f)
     return {
-        "server_url": "ws://localhost:8000/ws",
+        "server_url": "ws://localhost:8765/ws",
         "username": "",
         "token": ""
     }
@@ -29,9 +29,9 @@ def create_account():
     print("\n=== Create New Bot Account ===")
     
     # Get server URL
-    server_url = input(f"Server URL (default: http://localhost:8000): ").strip()
+    server_url = input(f"Server URL (default: http://localhost:8765): ").strip()
     if not server_url:
-        server_url = "http://localhost:8000"
+        server_url = "http://localhost:8765"
     
     # Get username
     username = input("Enter bot username: ").strip()

@@ -13,14 +13,14 @@ def load_config():
         with open(config_file, 'r') as f:
             return json.load(f)
     return {
-        "server_url": "ws://localhost:8000/ws",
+        "server_url": "ws://localhost:8765/ws",
         "username": "",
         "token": ""
     }
 
 # Load config
 config = load_config()
-SERVER_URL = config.get("server_url", "ws://localhost:8000/ws")
+SERVER_URL = config.get("server_url", "ws://localhost:8765/ws")
 TOKEN = config.get("token", "")
 USERNAME = config.get("username", "")
 
@@ -305,7 +305,7 @@ async def main():
     if not TOKEN or not USERNAME:
         print("ERROR: Please set your TOKEN and USERNAME in the script")
         print("Get your token by running:")
-        print("  curl -X POST 'http://localhost:8000/register?username=YOUR_USERNAME&is_bot=true'")
+        print("  curl -X POST 'http://localhost:8765/register?username=YOUR_USERNAME&is_bot=true'")
         sys.exit(1)
     
     bot = GomokuBot(TOKEN, USERNAME)

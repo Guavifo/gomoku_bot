@@ -28,13 +28,13 @@ If you prefer to set up manually:
 
 1. **Get Your Token:**
    ```bash
-   curl -X POST 'http://localhost:8000/register?username=YOUR_BOT_NAME&is_bot=true'
+   curl -X POST 'http://localhost:8765/register?username=YOUR_BOT_NAME&is_bot=true'
    ```
 
 2. **Edit config.json:**
    ```json
    {
-       "server_url": "ws://localhost:8000/ws",
+       "server_url": "ws://localhost:8765/ws",
        "username": "YOUR_BOT_NAME",
        "token": "your-token-here"
    }
@@ -156,7 +156,7 @@ This ensures the bot doesn't miss winning opportunities or lose to obvious threa
 ## Testing Your Bot
 
 1. Run your bot: `python bot.py`
-2. Watch it play through the web interface: http://localhost:8000
+2. Watch it play through the web interface: http://localhost:8765
 3. Check the leaderboard to see your ranking
 4. Review game files in `games/` folder to see what happened
 

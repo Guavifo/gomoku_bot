@@ -1,3 +1,8 @@
+## 2026-04-17
+*Moved server port from 8000 to 8765 to avoid conflicts with other local projects.*
+- Updated `server/server.py` — port binding and startup log messages
+- Updated both bot files, launchers, READMEs, and `setup.sh`
+
 ## 2026-03-28
 *Fixed completed game spectating — board, move history, and ELO data now load correctly when clicking a finished game.*
 - Fixed `GameState.finalize()` — no longer clears `board` or `move_history`; only resets connections/spectators so games remain viewable after completion

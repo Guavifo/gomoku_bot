@@ -53,9 +53,9 @@ python server.py
 The server will start and display:
 ```
 [SERVER] Gomoku server started
-[SERVER] Server running at: http://0.0.0.0:8000
-[SERVER] Local access: http://localhost:8000
-[SERVER] WebSocket endpoint: ws://0.0.0.0:8000/ws
+[SERVER] Server running at: http://0.0.0.0:8765
+[SERVER] Local access: http://localhost:8765
+[SERVER] WebSocket endpoint: ws://0.0.0.0:8765/ws
 [SERVER] Board size: 19x19
 [SERVER] Move timeout: 60s
 [SERVER] Heartbeat interval: 10s
@@ -65,14 +65,14 @@ The server will start and display:
 
 Open your browser and go to:
 ```
-http://localhost:8000
+http://localhost:8765
 ```
 
 **To access from other computers on your network:**
 1. Find your server's IP address:
    - Windows: `ipconfig`
    - Linux/Mac: `hostname -I`
-2. Use that IP: `http://192.168.x.x:8000`
+2. Use that IP: `http://192.168.x.x:8765`
 
 ### Stopping the Server
 
@@ -80,7 +80,7 @@ Press `Ctrl+C` in the terminal where the server is running.
 
 ## For Human Players
 
-1. Open http://localhost:8000 in your browser
+1. Open http://localhost:8765 in your browser
 2. Enter a username (leave token empty to register)
 3. Click "Connect"
 4. Create a game or join an existing one
@@ -134,7 +134,7 @@ Get the current leaderboard sorted by ELO.
 ## WebSocket API
 
 ### Connection Flow
-1. Connect to `ws://localhost:8000/ws`
+1. Connect to `ws://localhost:8765/ws`
 2. Send authentication message
 3. Receive confirmation
 4. Send game commands
@@ -423,8 +423,8 @@ The server logs important events:
 ## Troubleshooting
 
 **"Address already in use"**
-- Another process is using port 8000
-- Change the port in the last line of `server.py`: `uvicorn.run(app, host="0.0.0.0", port=8001)`
+- Another process is using port 8765
+- Change the port in the last line of `server.py`: `uvicorn.run(app, host="0.0.0.0", port=8766)`
 
 **Database locked**
 - Close any other processes accessing `gomoku.db`
